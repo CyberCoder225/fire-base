@@ -19,38 +19,38 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  
+
   if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Only POST allowed' });
-  }
-  
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Only POST allowed' });
+
   try {
     const db = initializeFirebase();
-    const { username, password, email } = req.body;
-    
-    // Validation
+
+    // Parse old Sketchware request format
+    let jsonData;
+    try {
+      jsonData = req.body.data ? JSON.parse(req.body.data) : req.body;
+    } catch(e) {
+      return res.status(400).json({ success: false, error: "Invalid JSON" });
+    }
+
+    const { username, password, email } = jsonData;
+
     if (!username || !password) {
-      return res.status(400).json({
-        success: false,
-        error: 'Username and password are required'
-      });
+      return res.status(400).json({ success: false, error: 'Username and password are required' });
     }
-    
+
     if (username.length < 3) {
-      return res.status(400).json({
-        success: false,
-        error: 'Username must be at least 3 characters'
-      });
+      return res.status(400).json({ success: false, error: 'Username must be at least 3 characters' });
     }
-    
-    // Check for duplicates
+
+    // Check duplicates
     const usernameLower = username.toLowerCase();
     const snapshot = await db.ref('users')
       .orderByChild('username_lower')
       .equalTo(usernameLower)
       .once('value');
-    
+
     if (snapshot.exists()) {
       return res.status(409).json({
         success: false,
@@ -63,14 +63,12 @@ export default async function handler(req, res) {
         ]
       });
     }
-    
+
     // Create user
     const userId = db.ref('users').push().key;
     const now = Date.now();
-    
-    // Simple password hash (use bcrypt in production!)
     const passwordHash = Buffer.from(password).toString('base64');
-    
+
     const userData = {
       id: userId,
       username: username,
@@ -84,18 +82,18 @@ export default async function handler(req, res) {
       isActive: true,
       role: 'user'
     };
-    
+
     await db.ref(`users/${userId}`).set(userData);
-    
+
     return res.status(201).json({
       success: true,
       message: 'User registered successfully',
       userId: userId,
       username: username,
       points: 10,
-      token: `user_${userId}_${now}` // Simple token (use JWT in production)
+      token: `user_${userId}_${now}`
     });
-    
+
   } catch (error) {
     return res.status(500).json({
       success: false,
@@ -103,4 +101,4 @@ export default async function handler(req, res) {
       message: error.message
     });
   }
-}
+  }
