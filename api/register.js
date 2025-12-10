@@ -1,5 +1,6 @@
 import admin from 'firebase-admin';
 
+// Initialize Firebase
 const initializeFirebase = () => {
   if (!admin.apps.length) {
     const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n') || '';
@@ -26,16 +27,17 @@ export default async function handler(req, res) {
   try {
     const db = initializeFirebase();
 
-    // Parse old Sketchware request format
+    // --- Handle old Sketchware POST with data=<JSON>
     let jsonData;
     try {
       jsonData = req.body.data ? JSON.parse(req.body.data) : req.body;
-    } catch(e) {
+    } catch (e) {
       return res.status(400).json({ success: false, error: "Invalid JSON" });
     }
 
     const { username, password, email } = jsonData;
 
+    // Validation
     if (!username || !password) {
       return res.status(400).json({ success: false, error: 'Username and password are required' });
     }
@@ -44,7 +46,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ success: false, error: 'Username must be at least 3 characters' });
     }
 
-    // Check duplicates
+    // Check for duplicates
     const usernameLower = username.toLowerCase();
     const snapshot = await db.ref('users')
       .orderByChild('username_lower')
@@ -67,6 +69,8 @@ export default async function handler(req, res) {
     // Create user
     const userId = db.ref('users').push().key;
     const now = Date.now();
+
+    // Simple password hash (for demo; use bcrypt in production)
     const passwordHash = Buffer.from(password).toString('base64');
 
     const userData = {
@@ -85,13 +89,14 @@ export default async function handler(req, res) {
 
     await db.ref(`users/${userId}`).set(userData);
 
+    // Success response
     return res.status(201).json({
       success: true,
       message: 'User registered successfully',
       userId: userId,
       username: username,
       points: 10,
-      token: `user_${userId}_${now}`
+      token: `user_${userId}_${now}` // simple token
     });
 
   } catch (error) {
@@ -101,4 +106,4 @@ export default async function handler(req, res) {
       message: error.message
     });
   }
-  }
+                                    }
