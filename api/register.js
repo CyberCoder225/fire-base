@@ -1,3 +1,4 @@
+// api/register.js
 import admin from 'firebase-admin';
 
 // Initialize Firebase
@@ -17,126 +18,117 @@ const initializeFirebase = () => {
 };
 
 export default async function handler(req, res) {
+  // Set CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-  if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Only POST allowed' });
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS, GET');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
 
   try {
     const db = initializeFirebase();
-
-    console.log('=== REQUEST RECEIVED ===');
-    console.log('Content-Type:', req.headers['content-type']);
-    console.log('Raw body:', req.body);
-    console.log('=======================');
-
-    let jsonData = {};
     
-    // Your Android app sends form-urlencoded: data={"username":"...","password":"...","email":"..."}
-    if (req.body && req.body.data) {
-      console.log('Found data field:', req.body.data);
-      
-      if (typeof req.body.data === 'string') {
-        try {
-          // Parse the JSON string inside the data parameter
-          jsonData = JSON.parse(req.body.data);
-          console.log('Parsed data successfully:', jsonData);
-        } catch (e) {
-          console.error('Failed to parse JSON in data field:', e.message);
-          console.error('Raw data string:', req.body.data);
-          
-          return res.status(400).json({ 
-            success: false, 
-            error: 'Invalid JSON format in data field'
-          });
-        }
-      } else {
-        // If data is already an object (unlikely with Sketchware)
-        jsonData = req.body.data;
+    console.log('=== REGISTER API CALLED ===');
+    console.log('Headers:', JSON.stringify(req.headers));
+    console.log('Body:', req.body);
+    console.log('Body type:', typeof req.body);
+
+    let username, password, email;
+
+    // Handle different formats
+    if (req.body) {
+      // Format 1: Direct fields (username, password, email)
+      if (req.body.username && req.body.password) {
+        username = req.body.username;
+        password = req.body.password;
+        email = req.body.email;
+        console.log('Using direct fields format');
       }
-    } else {
-      console.log('No data field found in request');
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Missing data parameter',
-        received: req.body
-      });
+      // Format 2: JSON string in "data" field (old Sketchware)
+      else if (req.body.data) {
+        console.log('Found data field:', req.body.data);
+        try {
+          const data = typeof req.body.data === 'string' 
+            ? JSON.parse(req.body.data) 
+            : req.body.data;
+          
+          username = data.username;
+          password = data.password;
+          email = data.email;
+          console.log('Using data field format');
+        } catch (e) {
+          console.error('Error parsing data field:', e);
+        }
+      }
+      // Format 3: Raw JSON body
+      else if (typeof req.body === 'object' && req.body.username) {
+        username = req.body.username;
+        password = req.body.password;
+        email = req.body.email;
+        console.log('Using raw JSON format');
+      }
     }
 
-    // Extract values
-    const username = (jsonData.username || '').trim();
-    const password = jsonData.password || '';
-    const email = (jsonData.email || '').trim();
-
-    console.log('Extracted:', { 
-      username: username || '(empty)', 
-      password: password ? '***' : '(empty)', 
-      email: email || '(empty)' 
+    console.log('Extracted values:', {
+      username: username || 'NOT FOUND',
+      password: password ? '***' : 'NOT FOUND',
+      email: email || 'NOT FOUND'
     });
 
-    // Validation
-    if (!username) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Username is required'
+    // Validate
+    if (!username || !password) {
+      return res.status(400).json({
+        success: false,
+        error: 'Username and password are required',
+        debug: {
+          received: req.body,
+          extracted: { username, password, email }
+        }
       });
     }
-    
-    if (!password) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Password is required'
-      });
-    }
+
+    // Clean values
+    username = username.toString().trim();
+    password = password.toString();
+    email = email ? email.toString().trim() : null;
 
     if (username.length < 3) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Username must be at least 3 characters' 
+      return res.status(400).json({
+        success: false,
+        error: 'Username must be at least 3 characters'
       });
     }
 
-    // Check for duplicates
+    // Check for existing user
     const usernameLower = username.toLowerCase();
-    console.log('Checking for username:', usernameLower);
-    
     const snapshot = await db.ref('users')
       .orderByChild('username_lower')
       .equalTo(usernameLower)
       .once('value');
 
     if (snapshot.exists()) {
-      console.log('Username already exists');
       return res.status(409).json({
         success: false,
-        error: 'Username already taken',
-        suggestions: [
-          `${username}123`,
-          `${username}_${Math.floor(Math.random() * 1000)}`,
-          `TheReal${username}`,
-          `${username}${new Date().getFullYear()}`
-        ]
+        error: 'Username already exists'
       });
     }
 
-    console.log('Creating new user...');
-    
-    // Create user ID
-    const newUserRef = db.ref('users').push();
-    const userId = newUserRef.key;
+    // Create user
+    const userId = db.ref('users').push().key;
     const now = Date.now();
-
-    // Simple password hash
-    const passwordHash = Buffer.from(password).toString('base64');
-
+    
     const userData = {
       id: userId,
       username: username,
       username_lower: usernameLower,
-      password: passwordHash,
-      email: email || null,
+      password: Buffer.from(password).toString('base64'),
+      email: email,
       points: 10,
       submissions: 0,
       createdAt: now,
@@ -145,33 +137,25 @@ export default async function handler(req, res) {
       role: 'user'
     };
 
-    console.log('Saving user to Firebase...');
+    await db.ref(`users/${userId}`).set(userData);
     
-    // Save to Firebase
-    await newUserRef.set(userData);
-    
-    console.log('User saved successfully! User ID:', userId);
+    console.log('User created successfully:', userId);
 
-    // Return success - match the exact fields your Android app expects
     return res.status(201).json({
       success: true,
-      message: 'User registered successfully',
-      userId: userId,  // Your app expects this
-      username: username,  // Your app expects this
-      points: 10,  // Your app expects this
-      token: `user_${userId}_${now}`  // Your app expects this
+      message: 'Registration successful',
+      userId: userId,
+      username: username,
+      points: 10,
+      token: `user_${userId}_${now}`
     });
 
   } catch (error) {
-    console.error('=== REGISTRATION ERROR ===');
-    console.error('Error:', error.message);
-    console.error('Stack:', error.stack);
-    console.error('=======================');
-    
+    console.error('Registration error:', error);
     return res.status(500).json({
       success: false,
-      error: 'Registration failed',
+      error: 'Internal server error',
       message: error.message
     });
   }
-}
+        }
