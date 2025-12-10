@@ -27,27 +27,77 @@ export default async function handler(req, res) {
   try {
     const db = initializeFirebase();
 
-    // --- Handle old Sketchware POST with data=<JSON>
+    // Debug log to see what we're receiving
+    console.log('Request body:', req.body);
+    console.log('Request headers:', req.headers['content-type']);
+
+    // Handle Sketchware POST format
     let jsonData;
-    try {
-      jsonData = req.body.data ? JSON.parse(req.body.data) : req.body;
-    } catch (e) {
-      return res.status(400).json({ success: false, error: "Invalid JSON" });
+    
+    // Sketchware sends form-encoded data with a "data" parameter containing JSON string
+    if (req.body && typeof req.body.data === 'string') {
+      try {
+        jsonData = JSON.parse(req.body.data);
+      } catch (e) {
+        console.error('Error parsing data field as JSON:', e);
+        console.error('Raw data field:', req.body.data);
+        
+        // Try to handle as regular form data if JSON parsing fails
+        if (req.body.username && req.body.password) {
+          jsonData = {
+            username: req.body.username,
+            password: req.body.password,
+            email: req.body.email || null
+          };
+        } else {
+          return res.status(400).json({ 
+            success: false, 
+            error: "Invalid data format. Expected JSON string in 'data' field",
+            received: req.body.data
+          });
+        }
+      }
+    } 
+    // If data is already an object (direct JSON post)
+    else if (req.body && typeof req.body.data === 'object') {
+      jsonData = req.body.data;
+    }
+    // If data is sent directly without "data" wrapper
+    else if (req.body && (req.body.username || req.body.password)) {
+      jsonData = req.body;
+    } else {
+      return res.status(400).json({ 
+        success: false, 
+        error: "No valid data provided",
+        body: req.body
+      });
     }
 
-    const { username, password, email } = jsonData;
+    console.log('Parsed data:', jsonData);
+
+    // Extract fields with fallbacks
+    const username = jsonData.username || '';
+    const password = jsonData.password || '';
+    const email = jsonData.email || null;
 
     // Validation
     if (!username || !password) {
-      return res.status(400).json({ success: false, error: 'Username and password are required' });
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Username and password are required',
+        received: { username, password }
+      });
     }
 
     if (username.length < 3) {
-      return res.status(400).json({ success: false, error: 'Username must be at least 3 characters' });
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Username must be at least 3 characters' 
+      });
     }
 
     // Check for duplicates
-    const usernameLower = username.toLowerCase();
+    const usernameLower = username.toLowerCase().trim();
     const snapshot = await db.ref('users')
       .orderByChild('username_lower')
       .equalTo(usernameLower)
@@ -75,10 +125,10 @@ export default async function handler(req, res) {
 
     const userData = {
       id: userId,
-      username: username,
+      username: username.trim(),
       username_lower: usernameLower,
       password: passwordHash,
-      email: email || null,
+      email: email ? email.trim() : null,
       points: 10,
       submissions: 0,
       createdAt: now,
@@ -94,16 +144,18 @@ export default async function handler(req, res) {
       success: true,
       message: 'User registered successfully',
       userId: userId,
-      username: username,
+      username: username.trim(),
       points: 10,
       token: `user_${userId}_${now}` // simple token
     });
 
   } catch (error) {
+    console.error('Registration error:', error);
     return res.status(500).json({
       success: false,
       error: 'Registration failed',
-      message: error.message
+      message: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
-                                    }
+}
