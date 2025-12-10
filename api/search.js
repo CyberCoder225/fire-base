@@ -22,12 +22,10 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   
-  // Handle OPTIONS preflight
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
   
-  // Only allow POST requests
   if (req.method !== 'POST') {
     return res.status(405).json({ 
       success: false, 
@@ -38,14 +36,14 @@ export default async function handler(req, res) {
   try {
     const db = initializeFirebase();
     
-    // Parse request body
-    let body;
-    try {
-      body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-    } catch (parseError) {
+    // Parse request body - Vercel provides req.body already parsed
+    let body = req.body;
+    
+    // If body is empty or undefined
+    if (!body || Object.keys(body).length === 0) {
       return res.status(400).json({
         success: false,
-        error: 'Invalid JSON in request body'
+        error: 'Request body is required'
       });
     }
     
@@ -59,7 +57,7 @@ export default async function handler(req, res) {
       });
     }
     
-    // Get all users from Firebase
+    // Get all users
     const snapshot = await db.ref('users').once('value');
     const results = [];
     
@@ -67,12 +65,10 @@ export default async function handler(req, res) {
       const user = child.val();
       const userId = child.key;
       
-      // Skip inactive users
       if (user.isActive === false) return;
       
       const fieldValue = user[field];
       
-      // Check if field exists and contains the query
       if (fieldValue && 
           fieldValue.toString().toLowerCase().includes(query.toLowerCase())) {
         
@@ -94,20 +90,17 @@ export default async function handler(req, res) {
       const bValue = b[field].toString().toLowerCase();
       const searchTerm = query.toLowerCase();
       
-      // Exact matches first
       if (aValue === searchTerm) return -1;
       if (bValue === searchTerm) return 1;
       
-      // Starts with query next
       if (aValue.startsWith(searchTerm)) return -1;
       if (bValue.startsWith(searchTerm)) return 1;
       
-      // Then by last active (most recent first)
       return (b.lastActive || 0) - (a.lastActive || 0);
     });
     
-    // Apply limit
-    const limitedResults = results.slice(0, parseInt(limit));
+    const limitNum = parseInt(limit) || 20;
+    const limitedResults = results.slice(0, limitNum);
     
     return res.status(200).json({
       success: true,
@@ -126,4 +119,4 @@ export default async function handler(req, res) {
       message: error.message
     });
   }
-                }
+}
