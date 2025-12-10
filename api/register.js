@@ -27,65 +27,102 @@ export default async function handler(req, res) {
   try {
     const db = initializeFirebase();
 
-    // Debug log to see what we're receiving
-    console.log('Request body:', req.body);
-    console.log('Request headers:', req.headers['content-type']);
-
-    // Handle Sketchware POST format
-    let jsonData;
-    
-    // Sketchware sends form-encoded data with a "data" parameter containing JSON string
-    if (req.body && typeof req.body.data === 'string') {
-      try {
-        jsonData = JSON.parse(req.body.data);
-      } catch (e) {
-        console.error('Error parsing data field as JSON:', e);
-        console.error('Raw data field:', req.body.data);
-        
-        // Try to handle as regular form data if JSON parsing fails
-        if (req.body.username && req.body.password) {
-          jsonData = {
-            username: req.body.username,
-            password: req.body.password,
-            email: req.body.email || null
-          };
-        } else {
-          return res.status(400).json({ 
-            success: false, 
-            error: "Invalid data format. Expected JSON string in 'data' field",
-            received: req.body.data
-          });
-        }
-      }
-    } 
-    // If data is already an object (direct JSON post)
-    else if (req.body && typeof req.body.data === 'object') {
-      jsonData = req.body.data;
-    }
-    // If data is sent directly without "data" wrapper
-    else if (req.body && (req.body.username || req.body.password)) {
-      jsonData = req.body;
-    } else {
+    // FIRST: Check if body is empty
+    if (!req.body) {
       return res.status(400).json({ 
         success: false, 
-        error: "No valid data provided",
-        body: req.body
+        error: 'Empty request body' 
       });
     }
 
-    console.log('Parsed data:', jsonData);
+    console.log('=== RAW REQUEST BODY ===');
+    console.log('Type:', typeof req.body);
+    console.log('Body:', req.body);
+    console.log('Body keys:', Object.keys(req.body));
+    console.log('======================');
 
-    // Extract fields with fallbacks
-    const username = jsonData.username || '';
+    // Your Android app sends: { data: '{"username":"test","password":"123","email":"test_123@pro-faira.com"}' }
+    // So we need to extract the "data" field and parse it
+    
+    let jsonData = {};
+    
+    // CASE 1: If "data" field exists and is a string (Sketchware format)
+    if (req.body.data) {
+      console.log('Found "data" field:', req.body.data);
+      console.log('Type of data field:', typeof req.body.data);
+      
+      if (typeof req.body.data === 'string') {
+        try {
+          jsonData = JSON.parse(req.body.data);
+          console.log('Parsed data successfully:', jsonData);
+        } catch (e) {
+          console.error('Failed to parse data as JSON:', e.message);
+          return res.status(400).json({ 
+            success: false, 
+            error: 'Invalid JSON in data field',
+            details: e.message
+          });
+        }
+      } else if (typeof req.body.data === 'object') {
+        // If data is already an object
+        jsonData = req.body.data;
+        console.log('Data is already object:', jsonData);
+      }
+    } 
+    // CASE 2: If fields are sent directly (not wrapped in "data")
+    else if (req.body.username || req.body.password) {
+      console.log('Found direct fields in body');
+      jsonData = req.body;
+    }
+    // CASE 3: Body might be a JSON string directly
+    else if (typeof req.body === 'string') {
+      try {
+        console.log('Body is string, parsing directly');
+        const parsedBody = JSON.parse(req.body);
+        if (parsedBody.data) {
+          if (typeof parsedBody.data === 'string') {
+            jsonData = JSON.parse(parsedBody.data);
+          } else {
+            jsonData = parsedBody.data;
+          }
+        } else {
+          jsonData = parsedBody;
+        }
+      } catch (e) {
+        console.error('Failed to parse body as JSON:', e.message);
+        return res.status(400).json({ 
+          success: false, 
+          error: 'Invalid JSON request body'
+        });
+      }
+    } else {
+      console.log('No recognizable data format');
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Unknown data format',
+        received: req.body
+      });
+    }
+
+    console.log('Final parsed data:', jsonData);
+
+    // Extract fields with defaults
+    const username = (jsonData.username || '').trim();
     const password = jsonData.password || '';
-    const email = jsonData.email || null;
+    const email = (jsonData.email || '').trim();
+
+    console.log('Extracted fields:', { username, password: password ? '***' : 'empty', email });
 
     // Validation
     if (!username || !password) {
       return res.status(400).json({ 
         success: false, 
         error: 'Username and password are required',
-        received: { username, password }
+        received: { 
+          username: username || 'missing', 
+          password: password ? '***' : 'missing',
+          email: email || 'missing'
+        }
       });
     }
 
@@ -97,13 +134,16 @@ export default async function handler(req, res) {
     }
 
     // Check for duplicates
-    const usernameLower = username.toLowerCase().trim();
+    const usernameLower = username.toLowerCase();
+    console.log('Checking for duplicate username:', usernameLower);
+    
     const snapshot = await db.ref('users')
       .orderByChild('username_lower')
       .equalTo(usernameLower)
       .once('value');
 
     if (snapshot.exists()) {
+      console.log('Username already exists:', usernameLower);
       return res.status(409).json({
         success: false,
         error: 'Username already taken',
@@ -116,19 +156,21 @@ export default async function handler(req, res) {
       });
     }
 
+    console.log('Username is available, creating user...');
+
     // Create user
     const userId = db.ref('users').push().key;
     const now = Date.now();
 
-    // Simple password hash (for demo; use bcrypt in production)
+    // Simple password hash
     const passwordHash = Buffer.from(password).toString('base64');
 
     const userData = {
       id: userId,
-      username: username.trim(),
+      username: username,
       username_lower: usernameLower,
       password: passwordHash,
-      email: email ? email.trim() : null,
+      email: email || null,
       points: 10,
       submissions: 0,
       createdAt: now,
@@ -137,25 +179,31 @@ export default async function handler(req, res) {
       role: 'user'
     };
 
+    console.log('Saving user to Firebase:', { userId, username });
+    
     await db.ref(`users/${userId}`).set(userData);
+    console.log('User saved successfully!');
 
     // Success response
     return res.status(201).json({
       success: true,
       message: 'User registered successfully',
       userId: userId,
-      username: username.trim(),
+      username: username,
       points: 10,
-      token: `user_${userId}_${now}` // simple token
+      token: `user_${userId}_${now}`
     });
 
   } catch (error) {
-    console.error('Registration error:', error);
+    console.error('=== REGISTRATION ERROR ===');
+    console.error('Error:', error.message);
+    console.error('Stack:', error.stack);
+    console.error('=======================');
+    
     return res.status(500).json({
       success: false,
       error: 'Registration failed',
-      message: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      message: error.message
     });
   }
-}
+    }
