@@ -38,19 +38,20 @@ export default async function handler(req, res) {
   try {
     const db = initializeFirebase();
     
-    // Get query parameters
+    // SAFE way to get query parameters in Vercel
+    // Vercel provides req.query automatically
     const { limit = 10, timeframe = '24h', algorithm = 'hackernews' } = req.query;
+    
     const now = Date.now();
     
     // Calculate time threshold
-    const timeThreshold = {
-      '1h': now - (60 * 60 * 1000),
-      '6h': now - (6 * 60 * 60 * 1000),
-      '12h': now - (12 * 60 * 60 * 1000),
-      '24h': now - (24 * 60 * 60 * 1000),
-      '7d': now - (7 * 24 * 60 * 60 * 1000),
-      '30d': now - (30 * 24 * 60 * 60 * 1000)
-    }[timeframe] || (now - (24 * 60 * 60 * 1000));
+    let timeThreshold = now - (24 * 60 * 60 * 1000); // Default 24h
+    
+    if (timeframe === '1h') timeThreshold = now - (60 * 60 * 1000);
+    else if (timeframe === '6h') timeThreshold = now - (6 * 60 * 60 * 1000);
+    else if (timeframe === '12h') timeThreshold = now - (12 * 60 * 60 * 1000);
+    else if (timeframe === '7d') timeThreshold = now - (7 * 24 * 60 * 60 * 1000);
+    else if (timeframe === '30d') timeThreshold = now - (30 * 24 * 60 * 60 * 1000);
     
     // Get all users from Firebase
     const snapshot = await db.ref('users').once('value');
@@ -60,8 +61,11 @@ export default async function handler(req, res) {
       const user = child.val();
       const userId = child.key;
       
+      // Skip if no username or created date
+      if (!user.username || !user.createdAt) return;
+      
       // Filter by timeframe and active users
-      if (user.createdAt && user.createdAt > timeThreshold && user.isActive !== false) {
+      if (user.createdAt > timeThreshold && user.isActive !== false) {
         // Calculate trending score
         const ageInHours = (now - user.createdAt) / (1000 * 60 * 60);
         const points = user.points || 0;
@@ -94,7 +98,7 @@ export default async function handler(req, res) {
         
         users.push({
           id: userId,
-          username: user.username || 'Unknown',
+          username: user.username,
           points: points,
           submissions: submissions,
           trendScore: parseFloat(trendScore.toFixed(4)),
@@ -108,7 +112,8 @@ export default async function handler(req, res) {
     users.sort((a, b) => b.trendScore - a.trendScore);
     
     // Get top N users
-    const trendingUsers = users.slice(0, parseInt(limit));
+    const limitNum = parseInt(limit) || 10;
+    const trendingUsers = users.slice(0, limitNum);
     
     return res.status(200).json({
       success: true,
@@ -126,7 +131,8 @@ export default async function handler(req, res) {
     return res.status(500).json({
       success: false,
       error: 'Failed to fetch trending users',
-      message: error.message
+      message: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
-}
+  }
