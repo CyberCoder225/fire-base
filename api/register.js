@@ -1,192 +1,232 @@
-// api/register-debug.js
+// api/register.js
 import admin from 'firebase-admin';
 
-console.log('=== API LOADED ===');
+console.log('=== REGISTER API LOADED ===');
 
-// Initialize Firebase
+// Initialize Firebase (do it once globally)
+let firebaseInitialized = false;
+let db = null;
+
 const initializeFirebase = () => {
+  if (firebaseInitialized && db) {
+    return db;
+  }
+  
   console.log('Initializing Firebase...');
   
   try {
-    if (!admin.apps.length) {
-      console.log('No Firebase apps, creating new one...');
+    // Check if Firebase is already initialized
+    if (admin.apps.length === 0) {
+      console.log('Creating new Firebase app...');
       
-      // Check environment variables
-      console.log('Checking env vars...');
-      console.log('Project ID exists:', !!process.env.FIREBASE_PROJECT_ID);
-      console.log('Client Email exists:', !!process.env.FIREBASE_CLIENT_EMAIL);
-      console.log('Private Key exists:', !!process.env.FIREBASE_PRIVATE_KEY);
-      console.log('Database URL exists:', !!process.env.FIREBASE_DATABASE_URL);
+      // Get environment variables
+      const projectId = process.env.FIREBASE_PROJECT_ID;
+      const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+      const privateKey = process.env.FIREBASE_PRIVATE_KEY;
+      const databaseURL = process.env.FIREBASE_DATABASE_URL;
       
-      if (!process.env.FIREBASE_PRIVATE_KEY) {
-        throw new Error('FIREBASE_PRIVATE_KEY is not set');
+      console.log('Project ID:', projectId);
+      console.log('Client Email:', clientEmail);
+      console.log('Private Key length:', privateKey?.length);
+      console.log('Database URL:', databaseURL);
+      
+      if (!projectId || !clientEmail || !privateKey || !databaseURL) {
+        throw new Error('Missing required Firebase environment variables');
       }
       
-      const privateKey = process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n');
-      console.log('Private key length:', privateKey.length);
+      // Format the private key (handle escaped newlines)
+      const formattedPrivateKey = privateKey.replace(/\\n/g, '\n');
       
+      // Initialize Firebase Admin SDK
       admin.initializeApp({
         credential: admin.credential.cert({
-          projectId: process.env.FIREBASE_PROJECT_ID,
-          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-          privateKey: privateKey
+          projectId: projectId,
+          clientEmail: clientEmail,
+          privateKey: formattedPrivateKey
         }),
-        databaseURL: process.env.FIREBASE_DATABASE_URL
+        databaseURL: databaseURL
       });
       
-      console.log('Firebase initialized successfully');
+      console.log('✅ Firebase Admin SDK initialized successfully');
     } else {
-      console.log('Firebase already initialized');
+      console.log('✅ Firebase already initialized');
     }
     
-    return admin.database();
+    // Get database reference
+    db = admin.database();
+    firebaseInitialized = true;
+    
+    console.log('✅ Database reference obtained');
+    return db;
+    
   } catch (error) {
-    console.error('Firebase initialization error:', error);
+    console.error('❌ Firebase initialization failed:', error.message);
+    console.error('Stack:', error.stack);
     throw error;
   }
 };
 
+// Initialize Firebase when the module loads
+try {
+  db = initializeFirebase();
+  console.log('✅ Firebase ready on module load');
+} catch (error) {
+  console.error('❌ Failed to initialize Firebase on load:', error.message);
+}
+
 export default async function handler(req, res) {
-  console.log('\n=== NEW REQUEST ===');
+  console.log('\n' + '='.repeat(50));
+  console.log('📨 NEW REGISTRATION REQUEST');
   console.log('Time:', new Date().toISOString());
   console.log('Method:', req.method);
+  console.log('Path:', req.url);
   
-  // Set CORS headers
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS, GET');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  
+  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
-    console.log('OPTIONS request, returning 200');
+    console.log('🔄 Handling OPTIONS (preflight)');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     return res.status(200).end();
   }
   
+  // Only allow POST
   if (req.method !== 'POST') {
-    console.log('Method not allowed:', req.method);
+    console.log('❌ Method not allowed:', req.method);
+    res.setHeader('Access-Control-Allow-Origin', '*');
     return res.status(405).json({ 
       success: false, 
-      error: 'Method not allowed' 
+      error: `Method ${req.method} not allowed. Only POST is accepted.`
     });
   }
-
+  
+  // Set CORS headers for the actual response
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  
   try {
-    console.log('Request body:', req.body);
-    console.log('Content-Type:', req.headers['content-type']);
-    
-    // Try to initialize Firebase
-    let db;
-    try {
+    // Ensure Firebase is initialized
+    if (!db) {
+      console.log('🔄 Initializing Firebase on request...');
       db = initializeFirebase();
-      console.log('Firebase DB initialized');
-    } catch (firebaseError) {
-      console.error('Firebase init failed:', firebaseError);
-      return res.status(500).json({
-        success: false,
-        error: 'Firebase initialization failed',
-        message: firebaseError.message
-      });
     }
     
-    // Parse request data
+    console.log('📝 Request body:', JSON.stringify(req.body, null, 2));
+    console.log('📋 Headers:', JSON.stringify(req.headers, null, 2));
+    
+    // Parse the request data - your Android app sends {data: '{"username":"...","password":"...","email":"..."}'}
     let username, password, email;
     
-    if (req.body && req.body.username && req.body.password) {
-      // Direct parameters
-      username = req.body.username;
-      password = req.body.password;
-      email = req.body.email;
-      console.log('Using direct parameters');
-    } else if (req.body && req.body.data) {
-      // Data parameter (Sketchware format)
-      console.log('Found data parameter:', req.body.data);
-      try {
-        const data = typeof req.body.data === 'string' 
-          ? JSON.parse(req.body.data) 
-          : req.body.data;
-        username = data.username;
-        password = data.password;
-        email = data.email;
-        console.log('Parsed data parameter');
-      } catch (parseError) {
-        console.error('Failed to parse data:', parseError);
-        return res.status(400).json({
-          success: false,
-          error: 'Invalid JSON in data parameter'
-        });
+    if (req.body && typeof req.body === 'object') {
+      // Method 1: Check for "data" parameter (Sketchware format)
+      if (req.body.data) {
+        console.log('📦 Found "data" parameter');
+        
+        try {
+          let data;
+          if (typeof req.body.data === 'string') {
+            console.log('📝 Data is string, parsing JSON...');
+            data = JSON.parse(req.body.data);
+          } else {
+            console.log('📝 Data is already object');
+            data = req.body.data;
+          }
+          
+          username = data.username;
+          password = data.password;
+          email = data.email;
+          
+          console.log('✅ Successfully parsed data parameter');
+        } catch (parseError) {
+          console.error('❌ Failed to parse data:', parseError.message);
+          console.error('Raw data:', req.body.data);
+        }
       }
-    } else {
-      console.log('No valid data found in request');
-      return res.status(400).json({
-        success: false,
-        error: 'No valid data provided',
-        received: req.body
-      });
+      
+      // Method 2: Direct parameters (fallback)
+      if (!username && req.body.username) {
+        username = req.body.username;
+        password = req.body.password;
+        email = req.body.email;
+        console.log('📦 Using direct parameters');
+      }
     }
     
-    console.log('Extracted values:', {
-      username: username || 'NOT FOUND',
-      password: password ? '***' : 'NOT FOUND',
-      email: email || 'NOT PROVIDED'
+    console.log('🎯 Extracted values:', {
+      username: username || '(not found)',
+      password: password ? '***' : '(not found)',
+      email: email || '(not provided)'
     });
     
-    // Validate
+    // Validate required fields
     if (!username || !password) {
-      console.log('Validation failed: missing username or password');
+      console.log('❌ Validation failed: Missing username or password');
       return res.status(400).json({
         success: false,
-        error: 'Username and password are required'
+        error: 'Username and password are required',
+        debug: {
+          receivedBody: req.body,
+          extracted: { username, password, email }
+        }
       });
     }
     
+    // Clean and validate
     username = username.toString().trim();
     password = password.toString();
     email = email ? email.toString().trim() : null;
     
     if (username.length < 3) {
-      console.log('Validation failed: username too short');
+      console.log('❌ Validation failed: Username too short');
       return res.status(400).json({
         success: false,
         error: 'Username must be at least 3 characters'
       });
     }
     
-    // Check for existing user
-    console.log('Checking for duplicate username:', username.toLowerCase());
+    // Check for duplicate username
+    const usernameLower = username.toLowerCase();
+    console.log('🔍 Checking for duplicate username:', usernameLower);
+    
     try {
       const snapshot = await db.ref('users')
         .orderByChild('username_lower')
-        .equalTo(username.toLowerCase())
+        .equalTo(usernameLower)
         .once('value');
       
-      console.log('Duplicate check result:', snapshot.exists());
-      
       if (snapshot.exists()) {
+        console.log('❌ Username already exists:', usernameLower);
         return res.status(409).json({
           success: false,
-          error: 'Username already taken'
+          error: 'Username already taken',
+          suggestions: [
+            `${username}123`,
+            `${username}_${Math.floor(Math.random() * 1000)}`,
+            `TheReal${username}`
+          ]
         });
       }
+      
+      console.log('✅ Username is available');
     } catch (dbError) {
-      console.error('Database query error:', dbError);
+      console.error('❌ Database error during duplicate check:', dbError.message);
       return res.status(500).json({
         success: false,
-        error: 'Database error during duplicate check',
+        error: 'Database error',
         message: dbError.message
       });
     }
     
-    // Create user
-    console.log('Creating new user...');
-    const userId = db.ref('users').push().key;
+    // Create new user
+    const userId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const now = Date.now();
     
-    console.log('Generated User ID:', userId);
+    console.log('👤 Creating user with ID:', userId);
     
     const userData = {
       id: userId,
       username: username,
-      username_lower: username.toLowerCase(),
-      password: Buffer.from(password).toString('base64'),
+      username_lower: usernameLower,
+      password: Buffer.from(password).toString('base64'), // Simple encoding
       email: email,
       points: 10,
       submissions: 0,
@@ -196,45 +236,48 @@ export default async function handler(req, res) {
       role: 'user'
     };
     
-    console.log('User data to save:', userData);
+    console.log('💾 Saving user data:', JSON.stringify(userData, null, 2));
     
     // Save to Firebase
     try {
       await db.ref(`users/${userId}`).set(userData);
-      console.log('User saved successfully!');
+      console.log('✅ User saved successfully to Firebase!');
     } catch (saveError) {
-      console.error('Failed to save user:', saveError);
+      console.error('❌ Failed to save user:', saveError.message);
+      console.error('Stack:', saveError.stack);
       return res.status(500).json({
         success: false,
-        error: 'Failed to save user to database',
+        error: 'Failed to save user data',
         message: saveError.message
       });
     }
     
-    // Success response
+    // Create success response
     const response = {
       success: true,
-      message: 'User registered successfully',
+      message: '🎉 Registration successful!',
       userId: userId,
       username: username,
       points: 10,
       token: `user_${userId}_${now}`
     };
     
-    console.log('Sending success response:', response);
+    console.log('📤 Sending success response:', JSON.stringify(response, null, 2));
+    console.log('='.repeat(50) + '\n');
+    
     return res.status(201).json(response);
     
   } catch (error) {
-    console.error('=== UNEXPECTED ERROR ===');
-    console.error('Error:', error.message);
+    console.error('\n❌❌❌ UNEXPECTED ERROR ❌❌❌');
+    console.error('Message:', error.message);
     console.error('Stack:', error.stack);
-    console.error('=======================');
+    console.error('='.repeat(50));
     
     return res.status(500).json({
       success: false,
       error: 'Internal server error',
       message: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      timestamp: new Date().toISOString()
     });
   }
-      }
+    }
