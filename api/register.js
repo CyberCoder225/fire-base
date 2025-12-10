@@ -16,33 +16,6 @@ const initializeFirebase = () => {
   return admin.database();
 };
 
-// Helper to parse raw body
-function parseBody(req) {
-  const contentType = req.headers['content-type'] || '';
-  
-  if (contentType.includes('application/x-www-form-urlencoded')) {
-    // Parse form data
-    const params = new URLSearchParams(req.body);
-    const result = {};
-    for (const [key, value] of params.entries()) {
-      result[key] = value;
-    }
-    return result;
-  }
-  
-  // If it's already parsed by Next.js, return as-is
-  if (typeof req.body === 'object' && req.body !== null) {
-    return req.body;
-  }
-  
-  // Try to parse as JSON
-  try {
-    return JSON.parse(req.body || '{}');
-  } catch (e) {
-    return {};
-  }
-}
-
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -56,53 +29,41 @@ export default async function handler(req, res) {
 
     console.log('=== REQUEST RECEIVED ===');
     console.log('Content-Type:', req.headers['content-type']);
-    console.log('Raw body type:', typeof req.body);
     console.log('Raw body:', req.body);
     console.log('=======================');
 
-    // Parse the body based on content type
-    const parsedBody = parseBody(req);
-    console.log('Parsed body:', parsedBody);
-    console.log('Parsed body keys:', Object.keys(parsedBody));
-
     let jsonData = {};
     
-    // Handle Sketchware format - data field containing JSON string
-    if (parsedBody.data) {
-      console.log('Found data field:', parsedBody.data);
+    // Your Android app sends form-urlencoded: data={"username":"...","password":"...","email":"..."}
+    if (req.body && req.body.data) {
+      console.log('Found data field:', req.body.data);
       
-      if (typeof parsedBody.data === 'string') {
+      if (typeof req.body.data === 'string') {
         try {
-          jsonData = JSON.parse(parsedBody.data);
-          console.log('Successfully parsed data field as JSON');
+          // Parse the JSON string inside the data parameter
+          jsonData = JSON.parse(req.body.data);
+          console.log('Parsed data successfully:', jsonData);
         } catch (e) {
-          console.error('Failed to parse data field:', e.message);
+          console.error('Failed to parse JSON in data field:', e.message);
+          console.error('Raw data string:', req.body.data);
           
-          // If parsing fails, try to extract values directly
-          if (parsedBody.username) {
-            jsonData = {
-              username: parsedBody.username,
-              password: parsedBody.password,
-              email: parsedBody.email
-            };
-          }
+          return res.status(400).json({ 
+            success: false, 
+            error: 'Invalid JSON format in data field'
+          });
         }
       } else {
-        // If data is already an object
-        jsonData = parsedBody.data;
+        // If data is already an object (unlikely with Sketchware)
+        jsonData = req.body.data;
       }
-    } 
-    // Check if fields are sent directly
-    else if (parsedBody.username || parsedBody.password) {
-      console.log('Found direct fields');
-      jsonData = parsedBody;
+    } else {
+      console.log('No data field found in request');
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Missing data parameter',
+        received: req.body
+      });
     }
-    // If body is the JSON directly
-    else if (typeof parsedBody === 'object' && parsedBody.username) {
-      jsonData = parsedBody;
-    }
-    
-    console.log('Final jsonData:', jsonData);
 
     // Extract values
     const username = (jsonData.username || '').trim();
@@ -119,16 +80,14 @@ export default async function handler(req, res) {
     if (!username) {
       return res.status(400).json({ 
         success: false, 
-        error: 'Username is required',
-        debug: { received: jsonData }
+        error: 'Username is required'
       });
     }
     
     if (!password) {
       return res.status(400).json({ 
         success: false, 
-        error: 'Password is required',
-        debug: { received: jsonData }
+        error: 'Password is required'
       });
     }
 
@@ -152,14 +111,21 @@ export default async function handler(req, res) {
       console.log('Username already exists');
       return res.status(409).json({
         success: false,
-        error: 'Username already taken'
+        error: 'Username already taken',
+        suggestions: [
+          `${username}123`,
+          `${username}_${Math.floor(Math.random() * 1000)}`,
+          `TheReal${username}`,
+          `${username}${new Date().getFullYear()}`
+        ]
       });
     }
 
     console.log('Creating new user...');
     
     // Create user ID
-    const userId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const newUserRef = db.ref('users').push();
+    const userId = newUserRef.key;
     const now = Date.now();
 
     // Simple password hash
@@ -179,34 +145,33 @@ export default async function handler(req, res) {
       role: 'user'
     };
 
-    console.log('Saving user:', userData);
+    console.log('Saving user to Firebase...');
     
     // Save to Firebase
-    await db.ref(`users/${userId}`).set(userData);
+    await newUserRef.set(userData);
     
-    console.log('User saved successfully!');
+    console.log('User saved successfully! User ID:', userId);
 
-    // Return success
+    // Return success - match the exact fields your Android app expects
     return res.status(201).json({
       success: true,
       message: 'User registered successfully',
-      userId: userId,
-      username: username,
-      points: 10,
-      token: `user_${userId}_${now}`
+      userId: userId,  // Your app expects this
+      username: username,  // Your app expects this
+      points: 10,  // Your app expects this
+      token: `user_${userId}_${now}`  // Your app expects this
     });
 
   } catch (error) {
     console.error('=== REGISTRATION ERROR ===');
-    console.error('Error message:', error.message);
-    console.error('Error stack:', error.stack);
+    console.error('Error:', error.message);
+    console.error('Stack:', error.stack);
     console.error('=======================');
     
     return res.status(500).json({
       success: false,
       error: 'Registration failed',
-      message: error.message,
-      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      message: error.message
     });
   }
 }
